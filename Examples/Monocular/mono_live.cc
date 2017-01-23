@@ -23,32 +23,42 @@
 #include<algorithm>
 #include<fstream>
 #include<chrono>
-#include<iomanip>
 #include <unistd.h>
 
 #include<opencv2/core/core.hpp>
 
-#include"System.h"
+#include<System.h>
+
+#include <sys/time.h>
+double currentTime(){
+  struct timeval tp;
+  gettimeofday(&tp, NULL);
+  long int ms = tp.tv_sec * 1000 + tp.tv_usec / 1000;
+  return ms/1000.;
+}
 
 using namespace std;
 
-void LoadImages(const string &strSequence, vector<string> &vstrImageFilenames,
+void LoadImages(const string &strFile, vector<string> &vstrImageFilenames,
                 vector<double> &vTimestamps);
 
 int main(int argc, char **argv)
 {
     if(argc != 4)
     {
-        cerr << endl << "Usage: ./mono_kitti path_to_vocabulary path_to_settings path_to_sequence" << endl;
+        cerr << endl << "Usage: ./mono_tum path_to_vocabulary path_to_settings path_to_sequence" << endl;
         return 1;
     }
 
     // Retrieve paths to images
     vector<string> vstrImageFilenames;
     vector<double> vTimestamps;
-    LoadImages(string(argv[3]), vstrImageFilenames, vTimestamps);
+    string strFile = string(argv[3])+"/rgb.txt";
+    cv::VideoCapture capture;
+    capture.open(atoi(argv[3]));
+    if (!capture.isOpened()){fprintf(stderr,"fail to open %s.\n",argv[3]);exit(-1);}
 
-    int nImages = vstrImageFilenames.size();
+    int nImages = 1<<16;
 
     // Create SLAM system. It initializes all system threads and gets ready to process frames.
     ORB_SLAM2::System SLAM(argv[1],argv[2],ORB_SLAM2::System::MONOCULAR,true);
@@ -56,6 +66,10 @@ int main(int argc, char **argv)
     // Vector for tracking time statistics
     vector<float> vTimesTrack;
     vTimesTrack.resize(nImages);
+    vTimestamps.resize(nImages);
+    for(int ni=0; ni<nImages; ni++){
+      vTimestamps[ni]=ni*0.03333333;
+    }
 
     cout << endl << "-------" << endl;
     cout << "Start processing sequence ..." << endl;
@@ -66,32 +80,24 @@ int main(int argc, char **argv)
     for(int ni=0; ni<nImages; ni++)
     {
         // Read image from file
-        im = cv::imread(vstrImageFilenames[ni],CV_LOAD_IMAGE_UNCHANGED);
+        capture >> im;
         double tframe = vTimestamps[ni];
 
         if(im.empty())
         {
-            cerr << endl << "Failed to load image at: " << vstrImageFilenames[ni] << endl;
+            cerr << endl << "Failed to load image at: "
+                 << string(argv[3]) << "/" << vstrImageFilenames[ni] << endl;
             return 1;
         }
 
-#ifdef COMPILEDWITHC11
-        std::chrono::steady_clock::time_point t1 = std::chrono::steady_clock::now();
-#else
-        std::chrono::monotonic_clock::time_point t1 = std::chrono::monotonic_clock::now();
-#endif
+        double t1 = currentTime();
 
         // Pass the image to the SLAM system
         SLAM.TrackMonocular(im,tframe);
 
-#ifdef COMPILEDWITHC11
-        std::chrono::steady_clock::time_point t2 = std::chrono::steady_clock::now();
-#else
-        std::chrono::monotonic_clock::time_point t2 = std::chrono::monotonic_clock::now();
-#endif
-
-        double ttrack= std::chrono::duration_cast<std::chrono::duration<double> >(t2 - t1).count();
-
+        double t2 = currentTime();
+        double ttrack = t2-t1;
+        
         vTimesTrack[ni]=ttrack;
 
         // Wait to load the next frame
@@ -120,39 +126,7 @@ int main(int argc, char **argv)
     cout << "mean tracking time: " << totaltime/nImages << endl;
 
     // Save camera trajectory
-    SLAM.SaveKeyFrameTrajectoryTUM("KeyFrameTrajectory.txt");    
+    SLAM.SaveKeyFrameTrajectoryTUM("KeyFrameTrajectory.txt");
 
     return 0;
-}
-
-void LoadImages(const string &strPathToSequence, vector<string> &vstrImageFilenames, vector<double> &vTimestamps)
-{
-    ifstream fTimes;
-    string strPathTimeFile = strPathToSequence + "/times.txt";
-    fTimes.open(strPathTimeFile.c_str());
-    while(!fTimes.eof())
-    {
-        string s;
-        getline(fTimes,s);
-        if(!s.empty())
-        {
-            stringstream ss;
-            ss << s;
-            double t;
-            ss >> t;
-            vTimestamps.push_back(t);
-        }
-    }
-
-    string strPrefixLeft = strPathToSequence + "/image_0/";
-
-    const int nTimes = vTimestamps.size();
-    vstrImageFilenames.resize(nTimes);
-
-    for(int i=0; i<nTimes; i++)
-    {
-        stringstream ss;
-        ss << setfill('0') << setw(6) << i;
-        vstrImageFilenames[i] = strPrefixLeft + ss.str() + ".png";
-    }
 }
